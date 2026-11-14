@@ -1,0 +1,102 @@
+# 폴더→장비config. base는 컨테이너에서 EQUIP_DATA_BASE=/nas/data로 override.
+base: /mnt/nas/data
+defaults:
+  equipment_type: generic
+  rpm_lo: 20.0
+  rpm_hi: 120.0
+  baseline_n: 10
+  sensitivity: 3.0
+folders:
+  "GY_DATA/pump data":
+    equipment_type: pump
+    # 채널→센서 매핑: 첨부 현장사진 순서(ch0~ch5)대로 배선, 현장 확인 완료(2026-07-08).
+    channel_labels:
+      ch0: "임펠러 옆"             # 2026-07-21 100038~ 이동(기존 "토출측 밸브부"→임펠러 옆). 아래 ch0 이동경계 주석 참조
+      ch1: "모터 연결부 옆면"      # 사진2: 모터-펌프 연결부 옆면 센서
+      ch2: "흡입측(SUCTION)"       # 사진3: 흡입 엘보 센서
+      ch3: "모터 팬측(NDE)"        # 사진4: 모터 팬커버(반구동단) 부근 센서
+      ch4: "모터 구동단(DE)"       # 사진5: 모터-펌프 플랜지(구동단) 센서
+      ch5: "토출측(DISCHARGE)"     # 사진6: 토출 플랜지 센서
+      ch6: "공기 마이크로폰(airborne, Pa)"  # 2026-07-20 추가: 음압(Pa) 단위, 가속도계와 다른 물리량
+                                            # (캐비 검출용 공기음향; ⚠️아래 calibration 스케일 적용 안 됨)
+    # 설비 제원(현장 명판·데이터에서 확인, 2026-07-08):
+    #   모터 HIGEN 0.75kW(1HP) 2P 220/380V 60Hz, 3450 r/min → 축 1x ≈ 57.5Hz
+    #   베어링 6204ZZC3(구동단 추정) / 6203ZZC3(반구동단) — Phase3 포락선 BPFO/BPFI 계산용
+    #   raw 파형 fs≈51.2kHz, 5초/256k샘플 → 베어링 포락선 분석 가능(선행조건 충족)
+    # rpm 밴드(2026-07-19 상수속도 확정): 실측 rpm은 3490~3494(58.2Hz)로 사실상 단일속도(VFD 변경
+    #   무영향). 밴드 20~120은 약신호 채널(ch0)서 검출기가 2×(116Hz)에 락돼 ~7000rpm 아티팩트(11%
+    #   세션) 유발 → 실 운전속도로 좁혀 50~70Hz(=3000~4200rpm)로 브래킷(2×·0.5× 배제). 전 채널 3493 정확.
+    rpm_lo: 50
+    rpm_hi: 70
+    baseline_n: 10
+    sensitivity: 3.0
+    # 상수속도라 rpm-binned baseline(가변속 F1) 불필요 → 단일 baseline. (rpm 밴드가 좁아 무해하나 명시.)
+    rpm_binned: false
+    # 베어링 포락선(Phase3): 모터 베어링 인접 센서에 결함주파수(BPFO/BPFI/BSF/FTF) 특징 부여.
+    #   ch3=팬측(NDE)→6203, ch4=구동단(DE)→6204. features.BEARING_CATALOG에서 제원 조회.
+    #   env_band 미지정 시 기본 (2000,10000)Hz. 캐시 재빌드 시 chN_env_* 컬럼 생성.
+    bearings:
+      ch3: {model: "6203"}
+      ch4: {model: "6204"}
+    # 포락선 밴드: VFD PWM 캐리어(실측 ~7.82~7.88kHz, 315=8.0kHz)를 피해 2~7kHz로 재설정
+    #   (기존 2~10k는 캐리어 7.88k를 포함해 오염). pwm_notch가 raw서 콤을 제거하지만 밴드도 보수적으로 하향.
+    env_band: [2000.0, 7000.0]
+    # 보정(calibration): 2026-07-07 11:23:46 DAQ 단위 통일(PXIe-4464_Data 리포). 이전엔 4464(ch0~3)=g,
+    #   4492(ch4~5)=raw V로 단위 불일치 → 이제 전부 m/s². 그 이전 세션 raw/fft를 물리 단위변환으로 보정:
+    #   ch0~3: g→m/s² ×9.80665(표준중력) | ch4~5: V→m/s² ×(1000/감도)=1000/10.2=98.0392(감도 10.2mV/(m/s²) 균일).
+    #   rebuild에도 유지. 진폭선형 특징 ×배율, band_energy ×배율², crest/kurtosis 불변.
+    #   ⚠️ch6(공기마이크, Pa)는 스케일 없음(dict에 미기재→_chscale 기본 1.0). 또한 ch6는 07-07 이후에만
+    #   존재해 이 before-cutoff 보정 자체가 적용되지 않음(이중 안전).
+    #   ⚠️IEPE 4mA 공급 이슈 해결(2026-07-20 18:01:59): 이후 ch4·ch5가 정상(더 큼)으로 읽힘. ch4/ch5는
+    #   3구간(<07-07 raw V | 07-07~07-20 m/s²이나 IEPE 저전력=약함 | >07-20 18:01 m/s² 정상=큼).
+    #   기존 health_model/baseline은 구간1-2 학습 → post-fix(구간3) 데이터를 섞으면 ch4/ch5 계단상승을
+    #   오탐. post-fix 분석(캐비 실험)은 구간3 정상세션으로 별도 baseline. (현 npz 데이터는 CSV 파이프라인에
+    #   안 잡혀 프로덕션 캐시는 자연히 절연됨; npz 지원 추가 시 재빌드는 구간 경계 고려 필수.)
+    calibration:
+      before: "20260707_112346"
+      scale:
+        ch0: 9.80665
+        ch1: 9.80665
+        ch2: 9.80665
+        ch3: 9.80665
+        ch4: 98.0392157
+        ch5: 98.0392157
+    # 죽은채널 제외 끔(0.0) — ch4(DE)·ch5(약신호 위치, dead 아님) 학습 포함.
+    activity_floor: 0.0
+    # ⚠️ch0 센서 이동(2026-07-21 100038~): 기존 "토출측 밸브부"→"임펠러 옆". 이동 후 시그니처 상이
+    #   (임펠러옆=RMS~9.2~9.9·3.1kHz 조립체공진 지배·kurt~0; 토출밸브=093038서 RMS 2.66·5.4kHz).
+    #   → 옛 ch0(토출, <100038) 데이터를 새 ch0(임펠러옆) baseline/모델에 섞으면 계단변화 오탐.
+    #   캐비 실험 등 post-이동 분석은 100038 이후 정상세션으로 별도 baseline. (ch4/ch5 IEPE·ch6와 유사 경계.)
+    #   임펠러옆=캐비 발생원 근접→캐비 검출 유리(3.1kHz 반송파 후보).
+    # robust_z baseline(진단): 첫 세션(2026-06-10, 옛 위치/스케일)은 대표성 없음. 재장착·단위통일
+    #   경계(2026-07-07 11:23:46) 이후 정상구간을 baseline으로. z_rel_floor: median의 5% 미만 변화는
+    #   이상으로 안 봄(균일 baseline에서 z 수천σ 폭증 방지). ch4/ch5는 이 시점 위치변경 재장착됨.
+    baseline_from: "20260707_112346"
+    z_rel_floor: 0.05
+    # VFD PWM 스위칭 콤 제거(2026-07-15 실측 확정): 15.76kHz는 임펠러 구조모드가 아니라
+    #   Schneider ATV310 캐리어(315=8.0kHz, 실측 ~7.88kHz)의 하모닉. 콤 7.88·15.76·23.6kHz가
+    #   RMS/kurtosis/band_energy/포락선을 오염 → band-stop 제거. carrier=8000·n_harm3·width400
+    #   (하모닉 k의 반폭=width·k로 콤 확산 커버). 근거: docs 및 pumpdown 테스트(off/on·유량·rpm 무관).
+    # 실측 캐리어 재중심(2026-07-18): 실 fft에서 PWM 기본파 피크 = 7820Hz(전 세션 일관, 8000 아님).
+    #   comb 하모닉 spread(15.64~15.76k·23.46~23.7k) 커버 위해 width 300(k=1:7520~8120,
+    #   k=2:15040~16240, k=3:22560~24360). ⚠️8180Hz는 PWM 사이드밴드(7820+360 블레이드패스)라 notch
+    #   미제거 — 공진추적 ch2 앵커를 오염시키므로 아래 resonances에서 ch2 제외.
+    pwm_notch:
+      carrier: 7820.0
+      n_harm: 3
+      width: 300.0
+    # 구조 공진 주파수 추적(2026-07-16, 앵커 실측보정 2026-07-18): 손상(균열·침식→강성저하)은 공진을
+    #   하향 이동시키나 진폭특징은 둔감(candidate3). 각 앵커 실피크를 추적해 robust_z로 드리프트 포착.
+    #   ⚠️단일채널 autospectrum에선 ch2 7462/8538 영역이 PWM 캐리어(7820)·사이드밴드(8180)에 지배돼
+    #   구조가 아닌 PWM을 추적 → ch2 제외. 청정 저·중주파만: 619(ch0 토출)·2194(ch3 NDE, PWM 무관).
+    #   (7462/8538↔PINN 임펠러 모드 검증은 OMA 교차스펙트럼 기반이라 유효; 단일채널 추적엔 부적합.)
+    resonances:
+      ch0: [619.0]
+      ch3: [2194.0]
+  # 향후 모터(데이터 확보 후 주석 해제·보완):
+  # "GY_DATA/motor data":
+  #   equipment_type: motor
+  #   pole_count: 4
+  #   line_freq_hz: 60
+  #   rpm_lo: 20
+  #   rpm_hi: 120
